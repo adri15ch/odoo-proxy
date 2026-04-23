@@ -111,33 +111,20 @@ app.post("/api/odoo/stock/actualizar", async (req, res) => {
     }
     const product_product_id = variantes[0].id;
 
-    // 3. Crear quant de inventario (ajuste directo de cantidad)
-    // Odoo 16/17: stock.quant con inventory_quantity + action_apply_inventory
+    // 3. Buscar quant existente
     const quantIds = await call(
       "stock.quant", "search",
       [[["product_id", "=", product_product_id], ["location_id", "=", location_id]]]
     );
 
     if (quantIds.length > 0) {
-      // Actualizar quant existente
-      await call(
-        "stock.quant", "write",
-        [[quantIds[0]], { inventory_quantity: cantidad }]
-      );
-      await call(
-        "stock.quant", "action_apply_inventory",
-        [[quantIds[0]]]
-      );
+      await call("stock.quant", "write", [[quantIds[0]], { inventory_quantity: cantidad }]);
+      await call("stock.quant", "action_apply_inventory", [[quantIds[0]]]);
     } else {
-      // Crear nuevo quant
-      const newQuantId = await call(
-        "stock.quant", "create",
-        [{ product_id: product_product_id, location_id, inventory_quantity: cantidad }]
+      const newId = await call("stock.quant", "create",
+        [[{ product_id: product_product_id, location_id: location_id, inventory_quantity: cantidad }]]
       );
-      await call(
-        "stock.quant", "action_apply_inventory",
-        [[newQuantId]]
-      );
+      await call("stock.quant", "action_apply_inventory", [[newId]]);
     }
 
     // 4. Leer el stock actualizado para confirmar
