@@ -1,6 +1,6 @@
 ﻿// odoo-proxy.cjs
 const express = require("express");
-const cors    = require("cors");
+const xmlrpc  = require("xmlrpc");
 
 const app = express();
 
@@ -14,110 +14,95 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 
-const ODOO_URL = "https://importax.odoo.com";
-const DB       = "importax";
-
-async function jsonRpc(url, method, params) {
-  const r = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ jsonrpc: "2.0", method: "call", id: 1, params })
-  });
-  const d = await r.json();
-  if (d.error) throw new Error(JSON.stringify(d.error));
-  return d.result;
+function crearCliente(url, path) {
+  const u = new URL(url);
+  const isHttps = u.protocol === "https:";
+  const host = u.hostname;
+  const port = u.port ? parseInt(u.port) : isHttps ? 443 : 80;
+  const cfg = { host, port, path, cookies: true };
+  return isHttps ? xmlrpc.createSecureClient(cfg) : xmlrpc.createClient(cfg);
 }
 
-async function autenticar(username, password) {
-  const uid = await jsonRpc(`${ODOO_URL}/web/dataset/call_kw`, "call", {
-    model: "res.users", method: "authenticate",
-    args: [DB, username, password, {}], kwargs: {}
-  });
+function llamar(client, method, params) {
+  return new Promise((resolve, reject) =>
+    client.methodCall(method, params, (err, val) => err ? reject(err) : resolve(val))
+  );
+}
+
+async function autenticar(url, db, username, password) {
+  const client = crearCliente(url, "/xmlrpc/2/common");
+  const uid = await llamar(client, "authenticate", [db, username, password, {}]);
   if (!uid) throw new Error("Credenciales incorrectas");
   return uid;
 }
 
-// ─── TEST ─────────────────────────────────────────────────────
 app.post("/api/odoo/test", async (req, res) => {
-  const { username, password } = req.body;
+  const { url, db, username, password } = req.body;
   try {
-    const uid = await autenticar(username, password);
+    const uid = await autenticar(url, db, username, password);
     res.json({ ok: true, uid });
   } catch (e) {
     res.status(400).json({ ok: false, error: e.message });
   }
 });
 
-// ─── RPC GENERICO ─────────────────────────────────────────────
 app.post("/api/odoo/rpc", async (req, res) => {
-  const { username, password, args } = req.body;
+  const { url, db, username, password, args } = req.body;
   try {
-    const uid = await autenticar(username, password);
-    const model       = args[3];
-    const modelMethod = args[4];
-    const domain      = args[5] || [];
-    const options     = args[6] || {};
-    const result = await jsonRpc(`${ODOO_URL}/web/dataset/call_kw`, "call", {
-      model, method: modelMethod,
-      args: [domain], kwargs: { ...options, context: { uid } }
-    });
+    const uid = await autenticar(url, db, username, password);
+    const client = crearCliente(url, "/xmlrpc/2/object");
+    const model = args[3], modelMethod = args[4];
+    const domain = args[5] || [], options = args[6] || {};
+    const result = await llamar(client, "execute_kw",
+      [db, uid, password, model, modelMethod, domain, options]);
     res.json({ ok: true, result });
   } catch (e) {
     res.status(400).json({ ok: false, error: e.message });
   }
 });
 
-// ─── ACTUALIZAR STOCK ─────────────────────────────────────────
 app.post("/api/odoo/stock/actualizar", async (req, res) => {
-  const { username, password, product_id, cantidad } = req.body;
+  const { url, db, username, password, product_id, cantidad } = req.body;
   if (!product_id || cantidad === undefined) {
     return res.status(400).json({ ok: false, error: "Faltan product_id o cantidad" });
   }
   try {
-    const uid = await autenticar(username, password);
+    const uid = await autenticar(url, db, username, password);
+    const obj = crearCliente(url, "/xmlrpc/2/object");
 
-    const call = (model, method, args, kwargs={}) =>
-      jsonRpc(`${ODOO_URL}/web/dataset/call_kw`, "call", {
-        model, method, args, kwargs: { ...kwargs, context: {} }
-      });
+    const call = (model, method, domain, opts={}) =>
+      llamar(obj, "execute_kw", [db, uid, password, model, method, domain, opts]);
 
-    // Buscar variante del producto
-    const variantes = await call("product.product", "search_read",
-      [[["product_tmpl_id", "=", product_id], ["active", "=", true]]],
-      { fields: ["id"], limit: 1 }
-    );
-    if (!variantes.length) throw new Error("No se encontró variante del producto");
-    const product_product_id = variantes[0].id;
+    // Buscar ubicacion interna
+    const locs = await call("stock.location", "search",
+      [[["usage","=","internal"],["active","=",true]]], { limit: 1 });
+    if (!locs.length) throw new Error("Sin ubicacion de stock");
+    const location_id = locs[0];
 
-    // Buscar ubicación interna
-    const ubicaciones = await call("stock.location", "search_read",
-      [[["usage", "=", "internal"], ["active", "=", true]]],
-      { fields: ["id"], limit: 1 }
-    );
-    if (!ubicaciones.length) throw new Error("No se encontró ubicación de stock");
-    const location_id = ubicaciones[0].id;
+    // Buscar variante
+    const vars = await call("product.product", "search",
+      [[["product_tmpl_id","=",product_id],["active","=",true]]], { limit: 1 });
+    if (!vars.length) throw new Error("Sin variante de producto");
+    const prod_id = vars[0];
 
-    // Buscar o crear quant
-    const quants = await call("stock.quant", "search_read",
-      [[["product_id", "=", product_product_id], ["location_id", "=", location_id]]],
-      { fields: ["id"], limit: 1 }
-    );
+    // Actualizar cantidad via inventory_quantity
+    const quants = await call("stock.quant", "search",
+      [[["product_id","=",prod_id],["location_id","=",location_id]]], { limit: 1 });
 
-    if (quants.length > 0) {
-      await call("stock.quant", "write", [[quants[0].id], { inventory_quantity: cantidad }]);
-      await call("stock.quant", "action_apply_inventory", [[quants[0].id]]);
+    if (quants.length) {
+      await call("stock.quant", "write", [[quants[0]], { inventory_quantity: cantidad }]);
+      await call("stock.quant", "action_apply_inventory", [[quants[0]]]);
     } else {
-      const newId = await call("stock.quant", "create",
-        [{ product_id: product_product_id, location_id, inventory_quantity: cantidad }]
-      );
-      await call("stock.quant", "action_apply_inventory", [[newId]]);
+      const nq = await call("stock.quant", "create",
+        [[{ product_id: prod_id, location_id, inventory_quantity: cantidad }]]);
+      await call("stock.quant", "action_apply_inventory", [[nq]]);
     }
 
-    res.json({ ok: true, mensaje: "Stock actualizado a " + cantidad + " unidades" });
+    res.json({ ok: true, mensaje: `Stock actualizado a ${cantidad} unidades` });
   } catch (e) {
     res.status(400).json({ ok: false, error: e.message });
   }
 });
 
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => console.log(`Proxy corriendo en puerto ${PORT}`));
+app.listen(PORT, () => console.log(`Proxy en puerto ${PORT}`));
