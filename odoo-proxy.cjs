@@ -15,7 +15,7 @@ function crearCliente(url, path) {
   const isHttps = u.protocol === "https:";
   const host    = u.hostname;
   const port    = u.port ? parseInt(u.port) : isHttps ? 443 : 80;
-  const cfg     = { host, port, path };
+  const cfg     = { host, port, path, allow_nil: true };
   return isHttps ? xmlrpc.createSecureClient(cfg) : xmlrpc.createClient(cfg);
 }
 
