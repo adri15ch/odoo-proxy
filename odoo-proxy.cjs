@@ -46,14 +46,13 @@ app.post("/api/odoo/test", async (req, res) => {
   }
 });
 
-// ─── LLAMADA GENÉRICA (reemplaza odooCall) ────────────────────
+// ─── LLAMADA GENÉRICA ─────────────────────────────────────────
 app.post("/api/odoo/rpc", async (req, res) => {
-  const { url, db, username, password, service, method, args } = req.body;
+  const { url, db, username, password, args } = req.body;
   try {
     const uid    = await autenticar(url, db, username, password);
     const client = crearCliente(url, "/xmlrpc/2/object");
 
-    // args = [db, uid, password, model, modelMethod, domain, options]
     const model       = args[3];
     const modelMethod = args[4];
     const domain      = args[5] || [];
@@ -66,6 +65,94 @@ app.post("/api/odoo/rpc", async (req, res) => {
       options
     ]);
     res.json({ ok: true, result });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+// ─── ACTUALIZAR STOCK ─────────────────────────────────────────
+// Recibe: { url, db, username, password, product_id, cantidad }
+// Crea un ajuste de inventario en Odoo directamente
+app.post("/api/odoo/stock/actualizar", async (req, res) => {
+  const { url, db, username, password, product_id, cantidad } = req.body;
+
+  if (!product_id || cantidad === undefined || cantidad === null) {
+    return res.status(400).json({ ok: false, error: "Faltan product_id o cantidad" });
+  }
+
+  try {
+    const uid    = await autenticar(url, db, username, password);
+    const client = crearCliente(url, "/xmlrpc/2/object");
+
+    const call = (model, method, domain, options = {}) =>
+      llamar(client, "execute_kw", [db, uid, password, model, method, domain, options]);
+
+    // 1. Buscar la ubicación de stock principal (Internal)
+    const ubicaciones = await call(
+      "stock.location", "search_read",
+      [[["usage", "=", "internal"], ["active", "=", true]]],
+      { fields: ["id", "complete_name"], limit: 1 }
+    );
+
+    if (!ubicaciones.length) {
+      return res.status(400).json({ ok: false, error: "No se encontró ubicación de stock" });
+    }
+    const location_id = ubicaciones[0].id;
+
+    // 2. Buscar el product.product (variante) a partir del product.template id
+    const variantes = await call(
+      "product.product", "search_read",
+      [[["product_tmpl_id", "=", product_id], ["active", "=", true]]],
+      { fields: ["id"], limit: 1 }
+    );
+
+    if (!variantes.length) {
+      return res.status(400).json({ ok: false, error: "No se encontró variante del producto" });
+    }
+    const product_product_id = variantes[0].id;
+
+    // 3. Crear quant de inventario (ajuste directo de cantidad)
+    // Odoo 16/17: stock.quant con inventory_quantity + action_apply_inventory
+    const quantIds = await call(
+      "stock.quant", "search",
+      [[["product_id", "=", product_product_id], ["location_id", "=", location_id]]]
+    );
+
+    if (quantIds.length > 0) {
+      // Actualizar quant existente
+      await call(
+        "stock.quant", "write",
+        [[quantIds[0]], { inventory_quantity: cantidad }]
+      );
+      await call(
+        "stock.quant", "action_apply_inventory",
+        [[quantIds[0]]]
+      );
+    } else {
+      // Crear nuevo quant
+      const newQuantId = await call(
+        "stock.quant", "create",
+        [{ product_id: product_product_id, location_id, inventory_quantity: cantidad }]
+      );
+      await call(
+        "stock.quant", "action_apply_inventory",
+        [[newQuantId]]
+      );
+    }
+
+    // 4. Leer el stock actualizado para confirmar
+    const productoActualizado = await call(
+      "product.template", "read",
+      [[product_id]],
+      { fields: ["id", "name", "qty_available"] }
+    );
+
+    res.json({
+      ok: true,
+      mensaje: "Stock actualizado correctamente",
+      producto: productoActualizado[0] || null
+    });
+
   } catch (e) {
     res.status(400).json({ ok: false, error: e.message });
   }
@@ -96,10 +183,11 @@ app.post("/api/odoo/sync", async (req, res) => {
 });
 
 // ─── INICIAR ──────────────────────────────────────────────────
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
-  console.log(`✅ Proxy Odoo corriendo en http://localhost:${PORT}`);
-  console.log(`   POST /api/odoo/test  — probar conexión`);
-  console.log(`   POST /api/odoo/rpc   — llamadas generales`);
-  console.log(`   POST /api/odoo/sync  — sincronizar módulos`);
+  console.log(`✅ Proxy Odoo corriendo en puerto ${PORT}`);
+  console.log(`   POST /api/odoo/test              — probar conexión`);
+  console.log(`   POST /api/odoo/rpc               — llamadas generales`);
+  console.log(`   POST /api/odoo/stock/actualizar  — actualizar stock`);
+  console.log(`   POST /api/odoo/sync              — sincronizar módulos`);
 });
