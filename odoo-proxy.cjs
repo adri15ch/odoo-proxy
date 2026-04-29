@@ -1,4 +1,5 @@
 'use strict';
+// SUMAQ Proxy v2.1 - CORS fix
 
 const express = require('express');
 const cors = require('cors');
