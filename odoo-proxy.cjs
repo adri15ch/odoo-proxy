@@ -7,14 +7,22 @@ const xmlrpc = require('xmlrpc');
 const app = express();
 app.use(express.json({ limit: '10mb' }));
 app.use(cors({
-  origin: [
-    'https://adri15ch.github.io',
-    'http://localhost:3000',
-    'http://127.0.0.1:5500',
-    'http://localhost:5500',
-  ],
+  origin: function(origin, callback) {
+    // Permitir cualquier origen local (Live Server, desarrollo) y GitHub Pages
+    const allowed = [
+      'https://adri15ch.github.io',
+      'https://unique-druid-4f34d5.netlify.app',
+    ];
+    // Sin origin = Postman / curl / mismo servidor
+    if (!origin) return callback(null, true);
+    // Cualquier localhost o 127.0.0.1 con cualquier puerto
+    if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return callback(null, true);
+    if (allowed.includes(origin)) return callback(null, true);
+    return callback(null, true); // en desarrollo permitir todo
+  },
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true,
 }));
 
 // ─── Odoo config ────────────────────────────────────────────────────────────
