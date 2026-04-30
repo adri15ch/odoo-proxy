@@ -354,7 +354,7 @@ app.post('/api/odoo/stock/actualizar', async (req, res) => {
     // 1. Verificar tipo de producto (service no maneja stock)
     const prods = await execute(uid, pass, 'product.product', 'search_read',
       [[['product_tmpl_id', '=', product_id]]],
-      { fields: ['id', 'name', 'type', 'detailed_type'], limit: 1 }
+      { fields: ['id', 'name', 'type'], limit: 1 }
     );
 
     // Si viene product_template id, buscar también por template
@@ -371,7 +371,7 @@ app.post('/api/odoo/stock/actualizar', async (req, res) => {
 
       const variantData = await execute(uid, pass, 'product.product', 'search_read',
         [[['id', '=', variantId]]],
-        { fields: ['id', 'name', 'type', 'detailed_type'], limit: 1 }
+        { fields: ['id', 'name', 'type'], limit: 1 }
       );
       prod = variantData?.[0];
     }
