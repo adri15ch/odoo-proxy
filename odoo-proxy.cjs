@@ -402,27 +402,26 @@ app.post('/api/odoo/stock/actualizar', async (req, res) => {
     // 3. Buscar quant existente para producto + ubicación
     const quants = await execute(uid, pass, 'stock.quant', 'search_read',
       [[['product_id', '=', variantProdId], ['location_id', '=', locId]]],
-      { fields: ['id', 'quantity', 'inventory_quantity'], limit: 1 }
+      { fields: ['id', 'quantity'], limit: 1 }
     );
 
     if (quants?.length > 0) {
-      // Actualizar directamente el campo quantity (evita action_apply_inventory)
+      // Escribir solo 'quantity' — 'inventory_quantity' es calculado en SaaS 19.2
       await execute(uid, pass, 'stock.quant', 'write',
-        [[quants[0].id], { quantity: qty, inventory_quantity: qty }]
+        [[quants[0].id], { quantity: qty }]
       );
     } else {
-      // Crear nuevo quant con la cantidad directa
+      // Crear nuevo quant — solo campos básicos
       await execute(uid, pass, 'stock.quant', 'create', [{
         product_id: variantProdId,
         location_id: locId,
         quantity: qty,
-        inventory_quantity: qty,
       }]);
     }
 
     res.json({
       success: true,
-      message: `Stock de "${prod.name}" actualizado a ${qty} unidades.`,
+      message: `Stock de "${prod.name}" actualizado a ${qty} unidades en Odoo.`,
     });
   } catch (e) {
     console.error('[STOCK UPDATE ERROR]', e.message);
