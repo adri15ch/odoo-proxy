@@ -202,9 +202,6 @@ app.post('/api/odoo/orden', async (req, res) => {
         product_uom_qty: linea.qty || 1,
         price_unit: linea.price || 0,
         name: linea.name || '',
-        // Limpiar impuestos de Odoo: el precio ya incluye IGV del frontend
-        // así el total en Odoo coincide exactamente con lo que pagó el cliente
-        tax_id: [[6, 0, []]],
       };
       if (variantId) lineData.product_id = variantId;
 
