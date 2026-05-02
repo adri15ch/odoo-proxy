@@ -543,6 +543,68 @@ app.post('/api/odoo/admin/reporte/ventas', async (req, res) => {
   }
 });
 
+// ─── KARDEX completo por producto ────────────────────────────────────────────
+app.post('/api/odoo/admin/kardex', async (req, res) => {
+  try {
+    const { username, password, product_tmpl_id, date_from, date_to } = req.body;
+    const uid  = await authenticate(username || ODOO_USER, password || ODOO_PASS);
+    const pass = password || ODOO_PASS;
+
+    // Dominio de búsqueda de movimientos
+    const domain = [['state', '=', 'done']];
+    if (product_tmpl_id) {
+      domain.push(['product_id.product_tmpl_id', '=', parseInt(product_tmpl_id)]);
+    }
+    if (date_from) domain.push(['date', '>=', date_from + ' 00:00:00']);
+    if (date_to)   domain.push(['date', '<=', date_to   + ' 23:59:59']);
+
+    const moves = await execute(uid, pass, 'stock.move', 'search_read',
+      [domain],
+      {
+        fields: [
+          'date', 'name', 'reference', 'origin',
+          'product_id', 'product_uom_qty', 'price_unit',
+          'location_id', 'location_dest_id', 'picking_type_id',
+        ],
+        order: 'date asc',
+        limit: 2000,
+      }
+    );
+
+    // Stock actual del producto
+    let stockActual = [];
+    if (product_tmpl_id) {
+      stockActual = await execute(uid, pass, 'stock.quant', 'search_read',
+        [[
+          ['product_id.product_tmpl_id', '=', parseInt(product_tmpl_id)],
+          ['location_id.usage', '=', 'internal'],
+        ]],
+        { fields: ['quantity', 'product_id', 'location_id', 'reserved_quantity'], limit: 10 }
+      );
+    }
+
+    // Info del producto
+    let productInfo = null;
+    if (product_tmpl_id) {
+      const pi = await execute(uid, pass, 'product.template', 'search_read',
+        [[['id', '=', parseInt(product_tmpl_id)]]],
+        { fields: ['id', 'name', 'default_code', 'categ_id', 'uom_id', 'list_price', 'standard_price'], limit: 1 }
+      );
+      productInfo = pi?.[0] || null;
+    }
+
+    res.json({
+      success: true,
+      movimientos: moves ?? [],
+      stock_actual: stockActual ?? [],
+      producto: productInfo,
+    });
+  } catch (e) {
+    console.error('[KARDEX ERROR]', e.message);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 // ─── Start server ─────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`SUMAQ Proxy v2.0 escuchando en :${PORT}`));
