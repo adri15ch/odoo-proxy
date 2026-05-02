@@ -558,13 +558,14 @@ app.post('/api/odoo/admin/kardex', async (req, res) => {
     if (date_from) domain.push(['date', '>=', date_from + ' 00:00:00']);
     if (date_to)   domain.push(['date', '<=', date_to   + ' 23:59:59']);
 
+    // Verificar campos disponibles en stock.move (SaaS 19.2 no tiene 'name' ni 'price_unit')
     const moves = await execute(uid, pass, 'stock.move', 'search_read',
       [domain],
       {
         fields: [
-          'date', 'name', 'reference', 'origin',
-          'product_id', 'product_uom_qty', 'price_unit',
-          'location_id', 'location_dest_id', 'picking_type_id',
+          'date', 'reference', 'origin',
+          'product_id', 'product_uom_qty',
+          'location_id', 'location_dest_id', 'picking_id',
         ],
         order: 'date asc',
         limit: 2000,
